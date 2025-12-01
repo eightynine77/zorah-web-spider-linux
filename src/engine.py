@@ -3,11 +3,12 @@ from flask import Flask, request, jsonify, render_template
 from bs4 import BeautifulSoup
 import requests
 import tldextract
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse  # <-- IMPORT urlparse
 from collections import deque
 import logging
 import webbrowser
 from threading import Timer
+import os  
 
 # --- IMPORTS TO HANDLE SSL WARNINGS ---
 import urllib3
@@ -20,6 +21,25 @@ urllib3.disable_warnings(InsecureRequestWarning)
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+
+# --- NEW: Set of file extensions for fast checking ---
+FILE_EXTENSIONS = {
+    # Archives
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2',
+    # Documents
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.csv',
+    # Images
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp',
+    # Audio
+    '.mp3', '.wav', '.ogg', '.m4a',
+    # Video
+    '.mp4', '.mkv', '.avi', 'mov', '.wmv',
+    # Executables
+    '.exe', '.msi', '.dmg', '.pkg',
+    # Other
+    '.iso', '.img', '.css', '.js'
+}
+
 
 # --- Python Backend (Flask Server) ---
 app = Flask(__name__, 
@@ -205,6 +225,45 @@ def crawl():
             
             result_obj = {"url": current_url} # Start building the result
 
+            # --- NEW: Efficient File Check using HEAD request ---
+            try:
+                # Parse the URL to get the path and extension
+                parsed_url = urlparse(current_url)
+                _, file_ext = os.path.splitext(parsed_url.path)
+
+                # If the extension is in our list, use a HEAD request
+                if file_ext.lower() in FILE_EXTENSIONS:
+                    log.info(f"File extension {file_ext} detected. Using HEAD request for {current_url}")
+                    
+                    # Use HEAD request to get headers only (much faster)
+                    response = requests.head(current_url, headers=headers, timeout=5, verify=False, allow_redirects=True)
+                    
+                    content_type = response.headers.get('content-type', 'N/A')
+                    status_code = response.status_code
+                    
+                    # Manually build the result object for the file
+                    result_obj.update({
+                        "title": f"[File] {os.path.basename(parsed_url.path) or current_url}",
+                        "status": status_code,
+                        "type": "File",
+                        "note": f"File detected by extension. Type: {content_type}",
+                        "services": {"cdn": "N/A (HEAD Req)", "waf": "N/A (HEAD Req)"} # We can't fingerprint with just HEAD
+                    })
+                    
+                    results.append(result_obj)
+                    continue # Move to the next URL in the queue
+            
+            except requests.RequestException as e:
+                # Handle HEAD request errors (e.g., server doesn't support HEAD)
+                log.warning(f"HEAD request failed for {current_url}: {e}. Falling back to GET.")
+                # If HEAD fails, we'll just let the GET request logic below handle it
+            except Exception as e:
+                log.error(f"Error during file check for {current_url}: {e}. Falling back to GET.")
+                # Fallback to GET
+            # --- END of new file check block ---
+
+
+            # --- EXISTING: Full GET Request Logic (for HTML pages or fallback) ---
             try:
                 # We add allow_redirects=True so we can analyze the *final* page
                 response = requests.get(current_url, headers=headers, timeout=5, verify=False, allow_redirects=True)
@@ -267,10 +326,12 @@ def start_server():
     from waitress import serve
     host = '127.0.0.1'
     port = 8080
+    app_url = f"http://{host}:{port}"
+    
+    Timer(1, open_browser, args=[app_url]).start()
     
     # Run the server
     serve(app, host=host, port=port)
 
 if __name__ == '__main__':
-
     start_server()
