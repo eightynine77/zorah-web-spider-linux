@@ -326,9 +326,6 @@ def start_server():
     from waitress import serve
     host = '127.0.0.1'
     port = 8080
-    app_url = f"http://{host}:{port}"
-    
-    Timer(1, open_browser, args=[app_url]).start()
     
     # Run the server
     serve(app, host=host, port=port)
