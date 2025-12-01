@@ -3,12 +3,14 @@ from flask import Flask, request, jsonify, render_template
 from bs4 import BeautifulSoup
 import requests
 import tldextract
-from urllib.parse import urljoin, urlparse  # <-- IMPORT urlparse
+# --- IMPORTS for URL parsing ---
+from urllib.parse import urljoin, urlparse
+import os
+# ---
 from collections import deque
 import logging
 import webbrowser
 from threading import Timer
-import os  
 
 # --- IMPORTS TO HANDLE SSL WARNINGS ---
 import urllib3
@@ -21,24 +23,6 @@ urllib3.disable_warnings(InsecureRequestWarning)
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
-
-# --- NEW: Set of file extensions for fast checking ---
-FILE_EXTENSIONS = {
-    # Archives
-    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2',
-    # Documents
-    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.csv',
-    # Images
-    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp',
-    # Audio
-    '.mp3', '.wav', '.ogg', '.m4a',
-    # Video
-    '.mp4', '.mkv', '.avi', 'mov', '.wmv',
-    # Executables
-    '.exe', '.msi', '.dmg', '.pkg',
-    # Other
-    '.iso', '.img', '.css', '.js'
-}
 
 
 # --- Python Backend (Flask Server) ---
@@ -66,7 +50,7 @@ def get_page_title(soup):
     except Exception:
         return "[Title Parse Error]"
 
-# --- NEW: Advanced Fingerprinting Function ---
+# --- Advanced Fingerprinting Function (Unchanged) ---
 def fingerprint_response(response, soup):
     """
     Analyzes an HTTP response to identify CDN & WAF services.
@@ -83,29 +67,25 @@ def fingerprint_response(response, soup):
     server = headers.get('server', '')
     
     # --- Hybrids (CDN + WAF) ---
-    # Cloudflare
     if 'cloudflare' in server or soup.find("form", id="cf-challenge-form"):
         services["cdn"] = "Cloudflare"
         services["waf"] = "Cloudflare"
     
-    # Akamai
     if 'akamai' in server or 'x-akamai-transformed' in headers:
         services["cdn"] = "Akamai"
         if "AkamaiGHost" in server or "akamai-bot-manager" in body_text:
              services["waf"] = "Akamai (Bot Manager)"
 
-    # Imperva / Incapsula
     if 'x-iinfo' in headers or 'incapsula' in server:
         services["cdn"] = "Imperva"
         services["waf"] = "Imperva (Incapsula)"
 
-    # Sucuri
     if 'x-sucuri-id' in headers or 'sucuri/cloudproxy' in server:
         services["cdn"] = "Sucuri"
         services["waf"] = "Sucuri"
 
-    # --- CDN-Only (or CDN with separate WAF) ---
-    if not services["cdn"]: # Only check if not already found by a hybrid
+    # --- CDN-Only ---
+    if not services["cdn"]:
         if 'cloudfront' in server or 'x-amz-cf-id' in headers:
             services["cdn"] = "AWS CloudFront"
         elif 'fastly' in server or ('x-served-by' in headers and 'x-cache' in headers):
@@ -115,28 +95,25 @@ def fingerprint_response(response, soup):
         elif 'keycdn' in headers.get('x-cache', ''):
             services["cdn"] = "KeyCDN"
             
-    # --- WAF-Only (or WAF with separate CDN) ---
-    if not services["waf"]: # Only check if not already found by a hybrid
-        if headers.get('x-amz-waf-action'): # AWS WAF
+    # --- WAF-Only ---
+    if not services["waf"]:
+        if headers.get('x-amz-waf-action'):
             services["waf"] = "AWS WAF"
         if "datadome" in str(response.cookies) or "pardon our interruption" in title:
             services["waf"] = "DataDome"
         if "f5-w" in headers or "BIG-IP" in server:
             services["waf"] = "F5 BIG-IP"
 
-    # --- Set Defaults (This is your "No CDN" logic) ---
+    # --- Set Defaults ---
     if not services["cdn"]:
         services["cdn"] = "N/A (Direct Host)"
     if not services["waf"]:
         services["waf"] = "N/A"
 
     # --- 2. Determine Status Type based on response ---
-    
-    # Check for Bot Blocker Pages (This is your "poke" logic)
     if (any(s in title for s in ["just a moment", "checking your browser", "access denied"]) or
         any(s in body_text for s in ["human verification", "are you a robot", "captcha"])):
         
-        # If we weren't sure what WAF it was, mark it as "Generic"
         if services["waf"] == "N/A":
             services["waf"] = "Generic Bot-Block"
             
@@ -145,8 +122,8 @@ def fingerprint_response(response, soup):
             "status": status_code, "services": services, "title": get_page_title(soup)
         }
         
-    # 2xx: Success
     if 200 <= status_code < 300:
+        # This check is now the *only* thing that determines a Page vs File
         if 'text/html' in headers.get('content-type', ''):
             return {
                 "type": "Page", "note": "OK",
@@ -158,33 +135,30 @@ def fingerprint_response(response, soup):
                 "status": status_code, "services": services, "title": "[Non-HTML File]"
             }
     
-    # 3xx: Redirect
     if 300 <= status_code < 400:
         return {
             "type": "Redirect", "note": f"Redirects to: {headers.get('location', 'N/A')}",
             "status": status_code, "services": services, "title": get_page_title(soup)
         }
 
-    # 4xx: Client Error (e.g., 404 Not Found)
     if 400 <= status_code < 500:
         return {
             "type": "Error", "note": f"Client Error: {response.reason}",
             "status": status_code, "services": services, "title": get_page_title(soup)
         }
         
-    # 5xx: Server Error
     if 500 <= status_code < 600:
         return {
             "type": "Error", "note": f"Server Error: {response.reason}",
             "status": status_code, "services": services, "title": get_page_title(soup)
         }
 
-    # Default fallback
     return {
         "type": "Error", "note": f"Unknown Status",
         "status": status_code, "services": services, "title": get_page_title(soup)
     }
 
+# This is the API endpoint that index.html sends the POST request to
 @app.route('/crawl', methods=['POST'])
 def crawl():
     """The main spider/crawler API endpoint (upgraded)."""
@@ -207,12 +181,11 @@ def crawl():
         visited_urls = set()
         results = [] 
         headers = {
-            # Using a common browser user-agent
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        crawl_limit = 100 
+        crawl_limit = 250 
 
         while urls_to_crawl and len(visited_urls) < crawl_limit:
             current_url = urls_to_crawl.popleft()
@@ -221,91 +194,91 @@ def crawl():
             
             current_url = current_url.split('#')[0]
             visited_urls.add(current_url)
-            log.info(f"Visiting: {current_url}")
             
-            result_obj = {"url": current_url} # Start building the result
+            result_obj = {"url": current_url}
+            response = None # Ensure response is defined
 
-            # --- NEW: Efficient File Check using HEAD request ---
             try:
-                # Parse the URL to get the path and extension
-                parsed_url = urlparse(current_url)
-                _, file_ext = os.path.splitext(parsed_url.path)
-
-                # If the extension is in our list, use a HEAD request
-                if file_ext.lower() in FILE_EXTENSIONS:
-                    log.info(f"File extension {file_ext} detected. Using HEAD request for {current_url}")
+                # --- THIS IS THE "IF/ELSE" LOGIC YOU WANTED ---
+                
+                # Step 1: Send a GET request, but only for headers
+                response = requests.get(
+                    current_url, 
+                    headers=headers, 
+                    timeout=5, 
+                    verify=False, 
+                    allow_redirects=True, 
+                    stream=True  # <-- This is the key: PAUSE before downloading body
+                )
+                
+                # Step 2: Check the Content-Type from the headers
+                content_type = response.headers.get('content-type', '').lower()
+                
+                # Step 3: The "If/Else"
+                
+                # --- IF: It's an HTML page, download and parse it ---
+                if 'text/html' in content_type:
+                    log.info(f"Content-Type is 'text/html'. Parsing {current_url} as a page.")
                     
-                    # Use HEAD request to get headers only (much faster)
-                    response = requests.head(current_url, headers=headers, timeout=5, verify=False, allow_redirects=True)
+                    # Now we download the content by accessing .text
+                    # This automatically consumes and closes the stream
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    analysis = fingerprint_response(response, soup)
                     
-                    content_type = response.headers.get('content-type', 'N/A')
-                    status_code = response.status_code
-                    
-                    # Manually build the result object for the file
                     result_obj.update({
-                        "title": f"[File] {os.path.basename(parsed_url.path) or current_url}",
-                        "status": status_code,
-                        "type": "File",
-                        "note": f"File detected by extension. Type: {content_type}",
-                        "services": {"cdn": "N/A (HEAD Req)", "waf": "N/A (HEAD Req)"} # We can't fingerprint with just HEAD
+                        "title": analysis["title"],
+                        "status": analysis["status"],
+                        "type": analysis["type"],
+                        "note": analysis["note"],
+                        "services": analysis["services"]
+                    })
+
+                    # Find and add new links to the queue
+                    if analysis["type"] == "Page":
+                        for link in soup.find_all('a', href=True):
+                            href = link.get('href')
+                            new_url = urljoin(current_url, href).split('#')[0]
+                            
+                            new_info = tldextract.extract(new_url)
+                            new_base_domain = f"{new_info.domain}.{new_info.suffix}"
+
+                            if new_base_domain == base_domain and new_url not in visited_urls and new_url.startswith('http'):
+                                urls_to_crawl.append(new_url)
+                
+                # --- ELSE: It's a file, just log it and move on ---
+                else:
+                    log.info(f"Content-Type is '{content_type}'. Logging {current_url} as a file.")
+                    
+                    # We don't access response.text, so the file is not downloaded.
+                    result_obj.update({
+                        "title": f"[File] {os.path.basename(urlparse(current_url).path) or current_url}",
+                        "status": response.status_code,
+                        "type": "File",  # <-- This matches your script.js case
+                        "note": f"File detected. Type: {content_type}",
+                        "services": {"cdn": "N/A", "waf": "N/A"} # Can't fingerprint files
                     })
                     
-                    results.append(result_obj)
-                    continue # Move to the next URL in the queue
-            
-            except requests.RequestException as e:
-                # Handle HEAD request errors (e.g., server doesn't support HEAD)
-                log.warning(f"HEAD request failed for {current_url}: {e}. Falling back to GET.")
-                # If HEAD fails, we'll just let the GET request logic below handle it
-            except Exception as e:
-                log.error(f"Error during file check for {current_url}: {e}. Falling back to GET.")
-                # Fallback to GET
-            # --- END of new file check block ---
-
-
-            # --- EXISTING: Full GET Request Logic (for HTML pages or fallback) ---
-            try:
-                # We add allow_redirects=True so we can analyze the *final* page
-                response = requests.get(current_url, headers=headers, timeout=5, verify=False, allow_redirects=True)
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # --- Call the new analyzer ---
-                analysis = fingerprint_response(response, soup)
-                
-                result_obj.update({
-                    "title": analysis["title"],
-                    "status": analysis["status"],
-                    "type": analysis["type"],
-                    "note": analysis["note"],
-                    "services": analysis["services"] # This is the new services object
-                })
-
-                # --- Only crawl links from successful pages ---
-                if analysis["type"] == "Page":
-                    for link in soup.find_all('a', href=True):
-                        href = link.get('href')
-                        new_url = urljoin(current_url, href).split('#')[0]
-                        
-                        new_info = tldextract.extract(new_url)
-                        new_base_domain = f"{new_info.domain}.{new_info.suffix}"
-
-                        if new_base_domain == base_domain and new_url not in visited_urls and new_url.startswith('http'):
-                            urls_to_crawl.append(new_url)
+                    # --- CRITICAL ---
+                    # We must manually close the connection to discard the body
+                    response.close()
 
             except requests.RequestException as e:
-                # --- Handle Connection Errors (SSL, DNS, Timeout, etc.) ---
                 log.warning(f"Could not crawl {current_url}: {e}")
                 result_obj.update({
                     "title": "[No Response]", "status": "N/A",
                     "type": "Error", "note": "Connection failed (e.g., SSL error or timeout)", "services": {"cdn": "N/A", "waf": "N/A"}
                 })
             except Exception as e:
-                # --- Handle local errors ---
                 log.error(f"An unexpected error occurred at {current_url}: {e}")
                 result_obj.update({
                     "title": "[Parsing Error]", "status": "N/A",
                     "type": "Error", "note": f"Local error: {str(e)}", "services": {"cdn": "N/A", "waf": "N/A"}
                 })
+            finally:
+                # In case an error happened after 'response' was assigned
+                # but before it was closed (e.g., during soup parsing)
+                if response and response.raw and not response.raw.closed:
+                    response.close()
             
             results.append(result_obj)
 
