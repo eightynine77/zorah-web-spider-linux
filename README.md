@@ -7,3 +7,5 @@ the linux port of [zorah web spider](https://github.com/eightynine77/zorah-web-s
 ## how to use
 run the installer.sh file to install all the python packages. after that, you are ready to use zorah. execute the run.sh file to start zorah.ph
 
+## windows version
+the windows version can be found [here](https://github.com/eightynine77/zorah-web-spider)
