@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-M">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python Web Spider</title>
+    
+    <!-- 
+      --- THIS IS THE KEY CHANGE ---
+      
+      We have removed the two <script> tags for the external CDN
+      and replaced them with a single, standard stylesheet link
+      to our new local tailwind.css file.
+      
+      Flask's 'url_for' will find it in the 'components' folder.
+    -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.css') }}">
+    
+    <!-- This is still our local stylesheet for the spinner animation -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans p-4 md:p-8 min-h-screen">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold text-center mb-6 text-blue-400">Python Web Spider</h1>
+
+        <!-- Input Form (No changes here) -->
+        <form id="crawl-form" class="flex flex-col sm:flex-row gap-2 mb-6">
+            <input 
+                type="url" 
+                id="start-url" 
+                placeholder="https:example.com"
+                required
+                class="flex-grow p-3 bg-gray-800 border border-gray-700 rounded-lg shadow-inner focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+            <button 
+                type="submit" 
+                id="crawl-button"
+                class="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white font-bold p-3 rounded-lg shadow-md transition-all duration-200 flex justify-center items-center gap-2"
+            >
+                <div id="spinner" class="spinner hidden"></div>
+                <span id="button-text">Start Crawl</span>
+            </button>
+        </form>
+
+        <!-- Status & Results (No changes here) -->
+        <div>
+            <h2 class="text-2xl font-semibold mb-4 border-b border-gray-700 pb-2">Results</h2>
+            <div id="status-message" class="text-gray-400 mb-4"></div>
+            <div id="results-container" class="space-y-2">
+                <!-- Results will be injected here by JavaScript -->
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 
+      This 'url_for' finds 'script.js' in your 'components' folder.
+      (No change here)
+    -->
+    <script src="{{ url_for('static', filename='script.js') }}" defer></script>
+</body>
+</html>
