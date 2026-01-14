@@ -9,3 +9,9 @@ run the installer.sh file to install all the python packages. after that, you ar
 
 # WARNING
 this project is simply the demonstration of how cybersecurity tools can be SIMPLIFIED. please be aware that i will not take any responsibilities whatsoever to whoever missuse and abuse this tool
+
+# READ THIS AGREEMENT
+before doing ANYTHING with this tool:
+https://github.com/eightynine77/zorah-web-spider/blob/main/ACCEPTABLE_USE.md
+https://github.com/eightynine77/zorah-web-spider/blob/main/SECURITY.md
+https://github.com/eightynine77/zorah-web-spider/blob/main/README.md
